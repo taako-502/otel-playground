@@ -1,6 +1,6 @@
 # otel-playground
 
-GoのHTTP APIでOpenTelemetryのトレースを学ぶ最小サンプル。
+GoのHTTP APIとブラウザでOpenTelemetryのトレース・メトリクス・簡単なRUMを学ぶサンプル。
 AWSアカウント、Docker、DBは不要です。
 
 ## 起動
@@ -13,7 +13,12 @@ cd otel-playground
 go run ./cmd
 ```
 
-別のターミナルからアクセスします。
+ブラウザで http://127.0.0.1:3000 を開きます。
+「正常なAPI」「1秒待つAPI」「HTTPエラー」「JavaScriptエラー」を押すと、
+画面に結果が表示され、ターミナルにトレース・ブラウザイベント・メトリクスが出力されます。
+Node.jsやnpmのインストールは不要です。
+
+APIだけを試す場合は、別のターミナルからアクセスします。
 
 ```sh
 curl http://127.0.0.1:3000/ok
@@ -41,11 +46,41 @@ Ctrl+Cで停止します。ポート変更は `PORT=3001 go run ./cmd` です。
 - `/slow`: リクエストのContextから子スパン `simulate-work` を作成。
 - `/error`: エラーを例外イベントとERRORステータスとして記録。
 - `stdouttrace`と`SimpleSpanProcessor`: 終了したスパンをターミナルに即時出力。
-- `cmd/main_test.go`: HTTP応答と記録されたスパンのテスト。
+- `cmd/metrics.go`: メトリクスの定義とブラウザイベントの受信・検証。
+- `cmd/index.html`: Goバイナリに埋め込む操作画面とブラウザ用JavaScript。
+- `cmd/*_test.go`: HTTP応答・スパン・メトリクス・不正イベントの検証。
 
 トレースはリクエスト全体、スパンはその中の処理区間です。
-このサンプルではトレースだけを扱い、メトリクスやクリック数、RUMはまだ収集しません。
-出力は保存されず、ダッシュボードもありません。
+
+## メトリクスとRUMの確認
+
+メトリクスは約5秒ごとと正常終了時に標準出力へJSONで出力します。
+`ScopeMetrics` 内の `Metrics` を探し、`Name` と `Data.DataPoints` を確認してください。
+カウンターの `Value` は起動後の累積回数、ヒストグラムの `Count`・`Sum`・`BucketCounts` は件数・合計・分布です。
+何も操作しない間も累積値を再出力するため、出力同士を足し合わせないでください。
+
+| メトリクス | 内容 |
+| --- | --- |
+| `demo.api.requests` | GET `/ok`・`/slow`・`/error` の呼び出し回数。`route`別 |
+| `demo.api.errors` | 上記APIのHTTP 500回数。`route`別 |
+| `http.server.request.duration` | Go側のHTTP処理時間（秒）。画面配信とイベント受信も含む |
+| `demo.browser.clicks` | 操作ボタンのクリック回数。`target`別 |
+| `demo.browser.errors` | ブラウザのJavaScriptエラー・未処理Promiseエラー回数 |
+| `demo.browser.navigation.duration` | ページ読み込み開始からloadイベント終了までの時間（ms） |
+| `demo.browser.fetch.duration` | ブラウザからAPIを呼び出し、本文を読み取るまでの時間（ms）。通信失敗時は失敗まで。`target`・`outcome`別 |
+
+4つのボタンを1回ずつ押すと、API呼び出しは3回、APIエラーは1回、クリックは4回、JavaScriptエラーは1回増えます。
+`/slow`のブラウザ通信時間はおよそ1秒以上になります。ページを再読み込みすると読み込み時間を再計測します。
+受信したイベントは `browser event` として標準エラー出力にも即時表示します。
+画面の送信件数は、そのページからのイベント受信成功・失敗を示します。
+
+RUM（実際のブラウザでの体験の計測）は、標準のPerformance APIとイベントリスナーを使った手動計測です。
+ブラウザは計測値を独自形式で `POST /events` に送り、GoのOpenTelemetry SDKがメトリクスへ変換します。
+OpenTelemetryのブラウザSDKやブラウザ側スパン、Core Web Vitals、セッション追跡は含みません。
+画面に表示するTraceIDはAPIのサーバースパンのものです。
+イベント送信自体の通信時間はブラウザ計測の対象に含めず、再帰的な送信を防いでいます。
+
+出力は保存されず、サーバー再起動で集計をリセットします。外部ダッシュボードは不要です。
 次の段階ではOTLP Exporterと可視化用バックエンドを追加できます。
 
 ## テスト
@@ -57,7 +92,7 @@ go test ./...
 ```
 
 HTTPハンドラーを呼び出し、応答、待機時間、有効なTraceID、
-HTTPスパンと子スパンの親子関係、例外イベント、エラーステータスを確認します。
+HTTPスパンと子スパンの親子関係、例外イベント、エラーステータス、メトリクス集計、不正イベントの拒否を確認します。
 GitHub Actionsでも実行します。
 
 ## ビルド

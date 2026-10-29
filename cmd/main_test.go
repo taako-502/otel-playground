@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/metric/noop"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/sdk/trace/tracetest"
 	"go.opentelemetry.io/otel/trace"
@@ -16,7 +17,11 @@ func TestResponsesAndTraces(t *testing.T) {
 	exporter := tracetest.NewInMemoryExporter()
 	provider := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
 	t.Cleanup(func() { _ = provider.Shutdown(t.Context()) })
-	handler := newHandler(provider)
+	measurements, err := newMetrics(noop.NewMeterProvider())
+	if err != nil {
+		t.Fatal(err)
+	}
+	handler := newHandler(provider, measurements)
 	for _, tc := range []struct {
 		method, path string
 		status       int

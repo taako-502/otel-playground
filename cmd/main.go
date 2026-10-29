@@ -2,6 +2,7 @@ package main
 
 import (
 	"context"
+	_ "embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -16,12 +17,18 @@ import (
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
+	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
+	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
 	"go.opentelemetry.io/otel/sdk/resource"
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 	"go.opentelemetry.io/otel/trace"
 )
+
+//go:embed index.html
+var indexHTML []byte
 
 func main() {
 	if err := run(); err != nil {
@@ -47,6 +54,26 @@ func run() error {
 		}
 	}()
 
+	metricExporter, err := stdoutmetric.New()
+	if err != nil {
+		return err
+	}
+	meterProvider := sdkmetric.NewMeterProvider(
+		sdkmetric.WithResource(resource.NewSchemaless(attribute.String("service.name", "otel-playground"))),
+		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(5*time.Second))),
+	)
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := meterProvider.Shutdown(ctx); err != nil {
+			log.Print(err)
+		}
+	}()
+	measurements, err := newMetrics(meterProvider)
+	if err != nil {
+		return err
+	}
+
 	port := os.Getenv("PORT")
 	if port == "" {
 		port = "3000"
@@ -55,7 +82,7 @@ func run() error {
 	if err != nil {
 		return err
 	}
-	server := &http.Server{Handler: newHandler(provider), ReadHeaderTimeout: 5 * time.Second}
+	server := &http.Server{Handler: newHandler(provider, measurements), ReadHeaderTimeout: 5 * time.Second}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	done := make(chan error, 1)
@@ -71,11 +98,22 @@ func run() error {
 	}
 }
 
-func newHandler(provider trace.TracerProvider) http.Handler {
+func newHandler(provider trace.TracerProvider, measurements *metrics) http.Handler {
 	tracer := provider.Tracer("playground")
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/events" {
+			measurements.receive(w, r)
+			return
+		}
+		isAPI := r.Method == http.MethodGet && (r.URL.Path == "/ok" || r.URL.Path == "/slow" || r.URL.Path == "/error")
+		if isAPI {
+			measurements.requests.Add(r.Context(), 1, metric.WithAttributes(attribute.String("route", r.URL.Path)))
+		}
 		span := trace.SpanFromContext(r.Context())
 		reply := func(status int, body map[string]any) {
+			if isAPI && status >= 500 {
+				measurements.errors.Add(r.Context(), 1, metric.WithAttributes(attribute.String("route", r.URL.Path)))
+			}
 			body["traceId"] = span.SpanContext().TraceID().String()
 			w.Header().Set("Content-Type", "application/json; charset=utf-8")
 			w.WriteHeader(status)
@@ -86,6 +124,9 @@ func newHandler(provider trace.TracerProvider) http.Handler {
 			return
 		}
 		switch r.URL.Path {
+		case "/":
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			_, _ = w.Write(indexHTML)
 		case "/ok":
 			reply(http.StatusOK, map[string]any{"message": "ok"})
 		case "/slow":
@@ -106,6 +147,7 @@ func newHandler(provider trace.TracerProvider) http.Handler {
 	})
 	return otelhttp.NewHandler(handler, "HTTP request",
 		otelhttp.WithTracerProvider(provider),
+		otelhttp.WithMeterProvider(measurements.provider),
 		otelhttp.WithPropagators(propagation.TraceContext{}),
 	)
 }
