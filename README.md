@@ -46,6 +46,8 @@ OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 go run ./cmd/api-a
 
 [操作画面](http://127.0.0.1:3000)を開けば、以降の操作はブラウザで行えます。
 [Grafanaダッシュボード](http://127.0.0.1:3300/d/otel-playground)はログイン不要です。
+[Prometheusの検索画面](http://127.0.0.1:9090)では、保存されたメトリクスを直接確認できます。
+例えば、操作画面でAPIを呼び出した後、`demo_api_requests_total`を検索するとAPIの呼び出し回数を確認できます（反映まで10〜15秒程度）。
 
 ## 画面で試す
 

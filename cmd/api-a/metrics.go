@@ -25,8 +25,14 @@ func newMetrics(provider metric.MeterProvider) (*metrics, error) {
 		name   string
 		target *metric.Int64Counter
 	}{
-		{"demo.api.requests", &m.requests}, {"demo.api.errors", &m.errors},
-		{"demo.browser.clicks", &m.clicks}, {"demo.browser.errors", &m.jsErrors},
+		// Prometheus名: demo_api_requests_total
+		{"demo.api.requests", &m.requests},
+		// Prometheus名: demo_api_errors_total
+		{"demo.api.errors", &m.errors},
+		// Prometheus名: demo_browser_clicks_total
+		{"demo.browser.clicks", &m.clicks},
+		// Prometheus名: demo_browser_errors_total
+		{"demo.browser.errors", &m.jsErrors},
 	} {
 		*item.target, err = meter.Int64Counter(item.name)
 		if err != nil {
