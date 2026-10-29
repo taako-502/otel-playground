@@ -1,17 +1,16 @@
 # otel-playground
 
-Node.jsのHTTP APIでOpenTelemetryのトレースを学ぶ最小サンプル。
+GoのHTTP APIでOpenTelemetryのトレースを学ぶ最小サンプル。
 AWSアカウント、Docker、DBは不要です。
 
 ## 起動
 
-Node.js 22以上を用意します。
+Go 1.27以上を用意し、リポジトリのルートで実行します。
 
 ```sh
 git clone https://github.com/taako-502/otel-playground.git
 cd otel-playground
-npm install
-npm start
+go run ./cmd
 ```
 
 別のターミナルからアクセスします。
@@ -26,23 +25,23 @@ curl -i http://127.0.0.1:3000/error
 | --- | --- |
 | /ok | HTTP 200ですぐ応答 |
 | /slow | 約1秒待ってHTTP 200。子スパン simulate-work を記録 |
-| /error | 意図的な例外でHTTP 500。例外イベントとERRORステータスを記録 |
+| /error | 意図的なエラーでHTTP 500。例外イベントとERRORステータスを記録 |
 
-レスポンスの traceId と、サーバーのターミナルに出る traceId を照合してください。
-/slow のHTTPスパンと simulate-work は同じ traceId になります。
-duration は [秒, ナノ秒] 形式です。/error の status.code: 2 はERRORを示します。
-成功したスパンの code: 0 はUNSETで、異常という意味ではありません。
-Ctrl+Cで停止します。ポート変更は `PORT=3001 npm start` です。
+レスポンスの `traceId` と、ターミナル出力の `SpanContext.TraceID` を照合してください。
+`/slow` のHTTPスパンと `simulate-work` は同じTraceIDになります。
+処理時間は `EndTime` と `StartTime` の差、エラーは `Status.Code: "Error"` で確認できます。
+成功したスパンの `Status.Code: "Unset"` は、異常という意味ではありません。
+
+Ctrl+Cで停止します。ポート変更は `PORT=3001 go run ./cmd` です。
+このサンプルはローカル学習用で、127.0.0.1でのみ待ち受けます。
 
 ## 構成
 
-- app.cjs: Node.js標準HTTPサーバー。/slowだけ手動で子スパンを作成。
-- instrumentation.cjs: OpenTelemetryを初期化し、HTTPの自動計測を有効化。
-- ConsoleSpanExporter: スパンをターミナルへ出力。
-- SimpleSpanProcessor: 学習しやすいよう終了したスパンを即時出力。
-
-`npm start` の --require で、HTTPモジュールより先に計測を初期化します。
-`node app.cjs` で直接起動すると自動計測の読み込み順が崩れるため、npm startを使ってください。
+- `cmd/main.go`: HTTPサーバーとOpenTelemetryの初期化。`otelhttp`でHTTPハンドラーを計測。
+- `/slow`: リクエストのContextから子スパン `simulate-work` を作成。
+- `/error`: エラーを例外イベントとERRORステータスとして記録。
+- `stdouttrace`と`SimpleSpanProcessor`: 終了したスパンをターミナルに即時出力。
+- `cmd/main_test.go`: HTTP応答と記録されたスパンのテスト。
 
 トレースはリクエスト全体、スパンはその中の処理区間です。
 このサンプルではトレースだけを扱い、メトリクスやクリック数、RUMはまだ収集しません。
@@ -51,20 +50,26 @@ Ctrl+Cで停止します。ポート変更は `PORT=3001 npm start` です。
 
 ## テスト
 
+リポジトリのルートで実行します。
+
 ```sh
-npm test
+go test ./...
 ```
 
-実際にサーバーを起動し、3つの応答、待機時間、有効なtraceId、
-トレース出力、子スパン、例外イベントを確認します。
+HTTPハンドラーを呼び出し、応答、待機時間、有効なTraceID、
+HTTPスパンと子スパンの親子関係、例外イベント、エラーステータスを確認します。
 GitHub Actionsでも実行します。
 
-依存パッケージの直接バージョンを固定しています。
-npm installで生成されるpackage-lock.jsonをコミットすれば推移的依存も固定できます。
+## ビルド
+
+`cmd/`ディレクトリと出力名が衝突しないよう指定します。
+
+```sh
+go build -o bin/otel-playground ./cmd
+./bin/otel-playground
+```
 
 ## 参考
 
-- [OpenTelemetry Node.js入門](https://opentelemetry.io/docs/languages/js/getting-started/nodejs/)
+- [OpenTelemetry Go入門](https://opentelemetry.io/docs/languages/go/getting-started/)
 - [OpenTelemetry Collector](https://opentelemetry.io/docs/collector/)
-
-このサンプルはローカル学習用で、127.0.0.1でのみ待ち受けます。

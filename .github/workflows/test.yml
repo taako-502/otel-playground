@@ -1,12 +1,12 @@
 name: Test
 on: [push, pull_request]
 jobs:
-  test:
+  go:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
         with:
-          node-version: '22'
-      - run: npm install
-      - run: npm test
+          go-version-file: go.mod
+          cache-dependency-path: go.sum
+      - run: go test ./...
