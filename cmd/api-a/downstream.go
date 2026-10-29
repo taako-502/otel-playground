@@ -34,6 +34,26 @@ func callDownstream(r *http.Request, origin string, propagated, isolated *http.C
 		reply(400, map[string]any{"error": "mode must be ok/slow/error; propagate must be true/false"})
 		return
 	}
+	delayA := r.URL.Query().Get("delay_a")
+	if delayA != "" && delayA != "true" && delayA != "false" {
+		reply(400, map[string]any{"error": "delay_a must be true/false"})
+		return
+	}
+	if delayA == "true" {
+		// Bを呼ぶ前にAで待機する。Bの遅延とウォーターフォールで比較する。
+		_, child := trace.SpanFromContext(r.Context()).TracerProvider().Tracer("playground").Start(r.Context(), "prepare-work")
+		timer := time.NewTimer(time.Second)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-r.Context().Done():
+			child.RecordError(r.Context().Err())
+			child.SetStatus(codes.Error, "request canceled")
+			child.End()
+			return
+		}
+		child.End()
+	}
 	client := propagated
 	if propagationMode == "false" {
 		client = isolated
@@ -72,6 +92,6 @@ func callDownstream(r *http.Request, origin string, propagated, isolated *http.C
 	reply(status, map[string]any{
 		"service": "api-a", "spanId": span.SpanContext().SpanID().String(),
 		"propagation": propagationMode == "true", "downstreamStatus": response.StatusCode,
-		"downstream": result,
+		"downstream": result, "delayA": delayA == "true",
 	})
 }

@@ -148,3 +148,50 @@ func TestDownstreamFailureAndValidation(t *testing.T) {
 	b.Close()
 	request("", 502)
 }
+
+func TestDelayInA(t *testing.T) {
+	exporter := tracetest.NewInMemoryExporter()
+	tp := sdktrace.NewTracerProvider(sdktrace.WithSyncer(exporter))
+	defer tp.Shutdown(context.Background())
+	mp := noop.NewMeterProvider()
+	measurements, err := newMetrics(mp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := httptest.NewServer(work.NewHandler(tp, mp))
+	defer b.Close()
+	handler := newHandler(tp, measurements, b.URL)
+	response := httptest.NewRecorder()
+	start := time.Now()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/downstream?mode=ok&delay_a=true", nil))
+	if response.Code != 200 || time.Since(start) < time.Second {
+		t.Fatal("A delay did not complete")
+	}
+	spans := exporter.GetSpans()
+	if len(spans) != 5 {
+		t.Fatalf("spans=%d, want 5", len(spans))
+	}
+	var prepare, client, root tracetest.SpanStub
+	for _, s := range spans {
+		if s.Name == "prepare-work" {
+			prepare = s
+		}
+		if s.SpanKind == trace.SpanKindClient {
+			client = s
+		}
+		if s.SpanKind == trace.SpanKindServer && !s.Parent.IsValid() {
+			root = s
+		}
+	}
+	if !prepare.SpanContext.IsValid() || prepare.Parent.SpanID() != root.SpanContext.SpanID() {
+		t.Fatal("prepare-work must be a child of A server")
+	}
+	if prepare.EndTime.Sub(prepare.StartTime) < time.Second || prepare.EndTime.After(client.StartTime) {
+		t.Fatal("A must wait before calling B")
+	}
+	response = httptest.NewRecorder()
+	handler.ServeHTTP(response, httptest.NewRequest("GET", "/downstream?delay_a=invalid", nil))
+	if response.Code != 400 {
+		t.Fatal("invalid delay must be rejected")
+	}
+}

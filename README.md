@@ -1,7 +1,7 @@
 # otel-playground
 
 GoのHTTP APIとブラウザでOpenTelemetryのトレース・メトリクス・簡単なRUMを学ぶサンプル。
-AWSアカウント、Docker、DBは不要です。
+入門編はGoだけで実行できます。CollectorとGrafanaを使う実践編にはDocker Composeを使います。
 
 ## 起動
 
@@ -100,7 +100,7 @@ HTTP 500を受けたAのCLIENTスパンもErrorになり、AはHTTP 502を返し
 B未起動・接続失敗・3秒のタイムアウトもAはHTTP 502で返します。
 実サービスでのステータス変換はAPIの設計によります。ここでは下流サービスの失敗を区別する教材上の選択です。
 
-この比較はA→Bの伝播が対象です。ブラウザ側のスパンや、Collector・外部可視化バックエンドはまだ追加していません。
+この比較はA→Bの伝播が対象です。ブラウザ側のスパンはまだ追加していません。Collector・保存先・Grafanaは下記の実践編で追加できます。
 画面はこのリポジトリ独自の学習用UIです。
 
 ## 構成
@@ -148,8 +148,115 @@ OpenTelemetryのブラウザSDKやブラウザ側スパン、Core Web Vitals、�
 画面に表示するTraceIDはAPIのサーバースパンのものです。
 イベント送信自体の通信時間はブラウザ計測の対象に含めず、再帰的な送信を防いでいます。
 
-出力は保存されず、サーバー再起動で集計をリセットします。外部ダッシュボードは不要です。
-次の段階ではOTLP Exporterと可視化用バックエンドを追加できます。
+入門編のターミナル出力は保存されず、サーバー再起動で集計をリセットします。実践編では送信済みのデータを保存できます。
+
+## 実践編：Collector・保存先・Grafana
+
+```text
+Go API A / API B ── OTLP/HTTP ── Collector
+                                  ├─ OTLP → Tempo（トレース保存）
+                                  └─ Prometheus形式で公開 ← Prometheusが定期取得（メトリクス保存）
+Grafana ── Tempo / Prometheusへ問い合わせて表示
+```
+
+### 起動
+
+Docker Desktop等を起動して、リポジトリのルートで実行します。
+
+```sh
+docker compose up -d
+```
+
+A/Bを起動済みなら停止し、**両方**に送信先を指定して再起動してください。
+
+```sh
+# ターミナル1
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 go run ./cmd/api-b
+# ターミナル2
+OTEL_EXPORTER_OTLP_ENDPOINT=http://127.0.0.1:4318 go run ./cmd/api-a
+```
+
+- 操作画面：http://127.0.0.1:3000
+- Grafana：http://127.0.0.1:3300/d/otel-playground （閲覧はログイン不要）
+- Prometheus：http://127.0.0.1:9090
+- Tempo API：http://127.0.0.1:3200
+
+入門編と同じ標準出力を残し、トレースをバッチ送信、メトリクスを5秒周期で送信します。
+Collectorがまとめて転送し、Prometheusが5秒周期で取得します。反映には通常10〜15秒程度待ってください。
+環境変数を外して再起動すれば、外部サービスなしの入門編に戻ります。
+`OTEL_EXPORTER_OTLP_ENDPOINT`が送信有効化のスイッチです。SDKの`OTEL_EXPORTER_OTLP_TRACES_ENDPOINT`等だけを指定しても有効にはしません。
+
+### 遅延の原因を調べる演習
+
+1. 「traceparentを伝播する」をONにする。
+2. **Aが遅いケース**：Bを「正常」、**Aで1秒待機**をONにして実行する。
+3. 結果欄の「このTraceIDをGrafanaで調べる」を開き、数秒後に再検索する。
+4. Aの`prepare-work`が約1秒、その後のA CLIENTとB SERVERは短いことを確認する。
+5. **Bが遅いケース**：Aの待機をOFF、Bを「1秒待機」にして実行する。
+6. Bの`simulate-work`が約1秒で、その間A CLIENTとA SERVERも待っていることを確認する。
+
+親スパンの時間は子スパンの時間を含みます。AとBの時間を足して合計処理時間と考えないでください。
+Grafanaではサービス名`api-a`・`api-b`とスパンの横棒（ウォーターフォール）を見比べます。
+SDKのバージョンによってHTTPスパン名は`GET`などになります。役割はSpan kind（SERVER/CLIENT）と属性でも確認できます。
+
+Bを「エラー」にすると、B HTTP 500 → A HTTP 502になり、両サービスのエラースパンを調べられます。
+伝播をOFFにするとAとBは別トレースです。BのTraceIDをダッシュボードのTraceID入力欄に貼り付けるとB側だけを表示できます。
+
+### メトリクスを見る
+
+ダッシュボードは自動登録されます。APIを繰り返し呼び、エラーも発生させると次を確認できます。
+
+- API呼び出し累積回数（route別）
+- APIの5xxエラー率（直近1分）
+- HTTPサーバー処理時間の平均・p95（service別）
+- クリック累積回数、ブラウザ通信時間の平均
+
+エラーを一度も起こしていない場合、エラーの時系列は未作成なのでエラー率は`No data`です。
+rateや平均には複数回の取得が必要です。初回起動後は10〜15秒待ってから追加操作してください。
+p95はヒストグラムのバケットから計算した近似値です。各リクエストの正確な内訳はトレースを見ます。
+HTTPメトリクスには操作画面と`/events`も含まれます。特定の処理だけの時間とは異なります。
+
+画面のTraceIDは、ダッシュボード上部のTraceID入力欄へ貼り付けても下部に表示できます。
+元のOTel名の`.`はPrometheus上では`_`になり、Counterには`_total`、時間には単位が付きます。
+例：`demo.api.requests` → `demo_api_requests_total`。
+
+### 保存・停止・接続確認
+
+Composeの名前付きボリュームに保存します。Tempoの保持期間は24時間、Prometheusは7日間です。
+`docker compose down`で停止してもボリュームは残り、次回起動時に保存済みデータを利用できます。
+サンプルのカウンターはA/B再起動でリセットしますが、Prometheusの過去データは保持されます。
+データも消して初期化したい場合だけ`docker compose down -v`を使います。
+
+```sh
+docker compose ps
+docker compose logs --tail=30 collector tempo prometheus grafana
+# 停止（GoのA/BはそれぞれCtrl+C）
+docker compose down
+```
+
+ホストの公開ポートはすべて127.0.0.1に限定しています。認証なしの閲覧とHTTP通信を使うローカル学習用構成です。
+本番に展開する場合は認証・TLS・アクセス制御・永続ストレージ・容量設計が別途必要です。
+Tempoはこのローカル構成ではボリュームに書き込むためコンテナ内でroot実行しています。
+Collectorの再送・キューはメモリ内で、停止中のデータを無制限に保持する構成ではありません。
+標準出力への同期出力、全トレース収集も学習用の設定です。
+
+ポート競合時は`GRAFANA_PORT`・`OTLP_PORT`・`TEMPO_PORT`・`PROMETHEUS_PORT`を指定してComposeを起動できます。
+変更したOTLPポートをA/Bの送信先にも設定してください。画面のGrafanaリンクは既定の3300番用なので、変更時はGrafanaを直接開いてTraceIDを貼り付けます。
+
+Python 3があれば、起動済みの全経路を次のスクリプトでも確認できます（約30秒）。
+実APIリクエストと検証用の合成クリック・通信時間イベントを送信するため、ダッシュボードの集計値に加算されます。
+
+```sh
+python3 scripts/verify-observability.py
+# Aのポートを変えている場合
+API_A_URL=http://127.0.0.1:3100 python3 scripts/verify-observability.py
+```
+
+Tempoの遅延スパン、Prometheusの全グラフ用クエリ、Grafana経由のトレース取得を検証します。
+保存先ポートを変更した場合は`TEMPO_URL`・`PROMETHEUS_URL`・`GRAFANA_URL`も指定できます。
+
+設定ファイルは`observability/`、ダッシュボード定義は`observability/grafana/dashboards/playground.json`です。
+使用イメージのバージョンは`compose.yaml`で固定しています。
 
 ## テスト
 

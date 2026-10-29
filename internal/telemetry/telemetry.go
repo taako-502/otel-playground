@@ -13,6 +13,8 @@ import (
 	"time"
 
 	"go.opentelemetry.io/otel/attribute"
+	"go.opentelemetry.io/otel/exporters/otlp/otlpmetric/otlpmetrichttp"
+	"go.opentelemetry.io/otel/exporters/otlp/otlptrace/otlptracehttp"
 	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
 	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
@@ -36,12 +38,31 @@ func New(service string) (Providers, func(), error) {
 		return Providers{}, nil, err
 	}
 	res := resource.NewSchemaless(attribute.String("service.name", service))
-	p := Providers{
-		// 終了直後に観察するため同期出力。本番のバッチ送信は次の学習段階。
-		Traces: sdktrace.NewTracerProvider(sdktrace.WithResource(res), sdktrace.WithSyncer(exporter)),
-		Metrics: sdkmetric.NewMeterProvider(sdkmetric.WithResource(res), sdkmetric.WithReader(
-			sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(5*time.Second)))),
+	traceOptions := []sdktrace.TracerProviderOption{sdktrace.WithResource(res), sdktrace.WithSyncer(exporter)}
+	metricOptions := []sdkmetric.Option{sdkmetric.WithResource(res), sdkmetric.WithReader(
+		sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(5*time.Second)))}
+	// エンドポイント未指定なら従来どおりターミナルだけで学習できる。
+	// HTTP/TLS、ヘッダーなどはOTel標準の環境変数をExporterが読み取る。
+	if os.Getenv("OTEL_EXPORTER_OTLP_ENDPOINT") != "" {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		remoteTraces, err := otlptracehttp.New(ctx)
+		if err != nil {
+			_ = exporter.Shutdown(ctx)
+			_ = metricExporter.Shutdown(ctx)
+			return Providers{}, nil, err
+		}
+		remoteMetrics, err := otlpmetrichttp.New(ctx)
+		if err != nil {
+			_ = remoteTraces.Shutdown(ctx)
+			_ = exporter.Shutdown(ctx)
+			_ = metricExporter.Shutdown(ctx)
+			return Providers{}, nil, err
+		}
+		traceOptions = append(traceOptions, sdktrace.WithBatcher(remoteTraces, sdktrace.WithBatchTimeout(time.Second)))
+		metricOptions = append(metricOptions, sdkmetric.WithReader(sdkmetric.NewPeriodicReader(remoteMetrics, sdkmetric.WithInterval(5*time.Second))))
 	}
+	p := Providers{Traces: sdktrace.NewTracerProvider(traceOptions...), Metrics: sdkmetric.NewMeterProvider(metricOptions...)}
 	shutdown := func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()

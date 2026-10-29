@@ -35,15 +35,18 @@ footer{flex:none;color:#65718a;font-size:12px;line-height:1.5}
 <h2>API A → API B のトレース伝播</h2>
 <div class="options">
 <label>Bの動作 <select id="work-mode"><option value="ok">正常</option><option value="slow" selected>1秒待機</option><option value="error">エラー</option></select></label>
+<label><input id="delay-a" type="checkbox"> Aで1秒待機</label>
 <label><input id="propagate" type="checkbox" checked> traceparentを伝播する</label>
 </div>
 <button class="primary" data-api="/downstream">API Bを呼ぶ</button>
+<p>Aだけを遅くする：Bは「正常」、Aで1秒待機をON。<br>Bだけを遅くする：Bは「1秒待機」、Aの待機をOFF。</p>
 <p>伝播あり：AとBが同じTraceID<br>伝播なし：Bが別のTraceIDで開始</p>
 <details><summary>スパンの関係・エラー時の動作</summary><p>伝播あり：A SERVER → A CLIENT → B SERVER → B simulate-work<br>伝播なし：A SERVER → A CLIENT ／ B SERVER → B simulate-work</p><p>BのHTTP 500はAでHTTP 502に変換します。Bが未起動の場合もHTTP 502になります。</p></details>
 </section>
 </div>
 <section class="panel output" aria-labelledby="results-heading">
 <div class="output-heading"><h2 id="results-heading">実行結果</h2><span class="hint">最新の結果が先頭に表示されます</span></div>
+<p><a href="http://127.0.0.1:3300/d/otel-playground" target="_blank" rel="noopener">Grafanaダッシュボード（実践編）</a> · <a id="trace-link" hidden target="_blank" rel="noopener">このTraceIDをGrafanaで調べる</a></p>
 <p id="delivery" role="status">ページ読み込みを計測中…</p>
 <pre id="results" aria-live="polite" tabindex="0" aria-label="実行結果と履歴">操作結果がここに表示されます。</pre>
 </section>
@@ -83,14 +86,18 @@ for (const button of document.querySelectorAll('[data-api]')) {
     try {
       let url = target;
       if (target === '/downstream') {
-        url += '?' + new URLSearchParams({mode: document.querySelector('#work-mode').value, propagate: String(document.querySelector('#propagate').checked)});
+        url += '?' + new URLSearchParams({mode: document.querySelector('#work-mode').value, propagate: String(document.querySelector('#propagate').checked), delay_a: String(document.querySelector('#delay-a').checked)});
       }
       const response = await fetch(url);
       const body = await response.json();
       outcome = response.ok ? 'ok' : 'http_error';
+      const traceLink = document.querySelector('#trace-link');
+      traceLink.href = 'http://127.0.0.1:3300/d/otel-playground?viewPanel=8&var-traceId=' + encodeURIComponent(body.traceId);
+      traceLink.hidden = !body.traceId;
       let message = `${target} → HTTP ${response.status}\nブラウザ通信時間 ${(performance.now() - start).toFixed(1)} ms\nA TraceID: ${body.traceId}`;
       if (body.downstream) {
         const b = body.downstream;
+        message += `\nAの事前待機: ${body.delayA ? '1秒' : 'なし'}`;
         message += `\n伝播: ${body.propagation ? 'あり' : 'なし'} / Bの動作: ${b.mode} / B HTTP ${body.downstreamStatus}`;
         message += `\nA SERVER SpanID: ${body.spanId}\nB TraceID: ${b.traceId}\nB SERVER SpanID: ${b.spanId}`;
         message += `\nBの親SpanID（A CLIENT）: ${b.parentSpanId || 'なし：Bは新しいトレースのルート'}\nB simulate-work SpanID: ${b.workSpanId}`;
