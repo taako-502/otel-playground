@@ -13,13 +13,16 @@ GoのAPIとブラウザを操作しながら、OpenTelemetryのトレース・�
 | TraceID / 伝播 | TraceIDはトレースの識別番号。別サービスにも引き継ぐ「伝播」によって、AとBの処理をひとつにつなげます。`traceparent`はその情報を運ぶHTTPヘッダーです。 |
 | メトリクス | 呼び出し回数や処理時間などの数値です。時間ごとの増減や傾向を見るのに使います。 |
 | Collector / OTLP | Collectorは計測データの中継役、OTLPはそのデータを送るための通信ルールです。 |
-| Tempo / Prometheus | このサンプルの保存先です。Tempoはトレース、Prometheusはメトリクスを扱います。 |
+| Tempo | トレースを保存・検索するサーバーソフトの製品名です。 |
+| Prometheus | 数値を時刻とセットで保存するデータベースと、数値を定期的に集める機能を備えた監視サーバーソフトです。 |
 | Grafana / ダッシュボード | Grafanaは保存されたデータをグラフなどで見る道具。グラフをまとめた画面をダッシュボードと呼びます。 |
 | RUM | 実際のブラウザで、ページの読み込み時間や操作時のエラーなどを測ることです。 |
 | p95 / エラー率 | p95は「100回中およそ95回がこの時間以内に終わる」という目安。エラー率は呼び出しのうち失敗した割合です。 |
 | Docker Compose | CollectorやGrafanaなど、複数のソフトをまとめて起動・停止する道具です。 |
 
 このサンプルでは、**OpenTelemetryで測る → Collectorが中継する → Tempo・Prometheusに保存する → Grafanaで見る**、という流れです。
+
+このサンプルでは、`docker compose up -d`で**Collector・Tempo・Prometheus・Grafanaの4つのソフト**を起動し、GoのAPI A/Bは別に起動します。
 
 ## 起動する
 
