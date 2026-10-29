@@ -243,13 +243,14 @@ Collectorの再送・キューはメモリ内で、停止中のデータを無�
 ポート競合時は`GRAFANA_PORT`・`OTLP_PORT`・`TEMPO_PORT`・`PROMETHEUS_PORT`を指定してComposeを起動できます。
 変更したOTLPポートをA/Bの送信先にも設定してください。画面のGrafanaリンクは既定の3300番用なので、変更時はGrafanaを直接開いてTraceIDを貼り付けます。
 
-Python 3があれば、起動済みの全経路を次のスクリプトでも確認できます（約30秒）。
+起動済みの全経路をGoの結合テストでも確認できます（約30秒）。
+`integration`ビルドタグを指定したときだけ実行され、通常の`go test ./...`には含まれません。
 実APIリクエストと検証用の合成クリック・通信時間イベントを送信するため、ダッシュボードの集計値に加算されます。
 
 ```sh
-python3 scripts/verify-observability.py
+go test -tags=integration ./integration -v -count=1 -timeout=5m
 # Aのポートを変えている場合
-API_A_URL=http://127.0.0.1:3100 python3 scripts/verify-observability.py
+API_A_URL=http://127.0.0.1:3100 go test -tags=integration ./integration -v -count=1 -timeout=5m
 ```
 
 Tempoの遅延スパン、Prometheusの全グラフ用クエリ、Grafana経由のトレース取得を検証します。
