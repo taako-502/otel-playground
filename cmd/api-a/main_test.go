@@ -21,7 +21,7 @@ func TestResponsesAndTraces(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := newHandler(provider, measurements)
+	handler := newHandler(provider, measurements, "http://127.0.0.1:3001")
 	for _, tc := range []struct {
 		method, path string
 		status       int

@@ -78,7 +78,7 @@ func (m *metrics) receive(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "invalid duration", 400)
 		return
 	}
-	validAPI := event.Target == "/ok" || event.Target == "/slow" || event.Target == "/error"
+	validAPI := event.Target == "/ok" || event.Target == "/slow" || event.Target == "/error" || event.Target == "/downstream"
 	valid := false
 	switch event.Type {
 	case "click":

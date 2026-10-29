@@ -18,7 +18,7 @@ func TestMetricsAndBrowserEvents(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	handler := newHandler(noop.NewTracerProvider(), measurements)
+	handler := newHandler(noop.NewTracerProvider(), measurements, "http://127.0.0.1:3001")
 	send := func(method, path, body string, status int) {
 		t.Helper()
 		response := httptest.NewRecorder()

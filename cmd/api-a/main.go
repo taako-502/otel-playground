@@ -1,29 +1,24 @@
 package main
 
 import (
-	"context"
 	_ "embed"
 	"encoding/json"
 	"errors"
-	"fmt"
+	"github.com/taako-502/otel-playground/internal/telemetry"
 	"log"
-	"net"
 	"net/http"
+	"net/url"
 	"os"
-	"os/signal"
-	"syscall"
+	"strings"
 	"time"
 
 	"go.opentelemetry.io/contrib/instrumentation/net/http/otelhttp"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
-	"go.opentelemetry.io/otel/exporters/stdout/stdoutmetric"
-	"go.opentelemetry.io/otel/exporters/stdout/stdouttrace"
+
 	"go.opentelemetry.io/otel/metric"
 	"go.opentelemetry.io/otel/propagation"
-	sdkmetric "go.opentelemetry.io/otel/sdk/metric"
-	"go.opentelemetry.io/otel/sdk/resource"
-	sdktrace "go.opentelemetry.io/otel/sdk/trace"
+
 	"go.opentelemetry.io/otel/trace"
 )
 
@@ -37,75 +32,39 @@ func main() {
 }
 
 func run() error {
-	exporter, err := stdouttrace.New(stdouttrace.WithPrettyPrint())
+	providers, shutdown, err := telemetry.New("api-a")
 	if err != nil {
 		return err
 	}
-	// 学習用に、終了したスパンを即時出力する。
-	provider := sdktrace.NewTracerProvider(
-		sdktrace.WithSyncer(exporter),
-		sdktrace.WithResource(resource.NewSchemaless(attribute.String("service.name", "otel-playground"))),
-	)
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := provider.Shutdown(ctx); err != nil {
-			log.Print(err)
-		}
-	}()
+	defer shutdown()
+	provider, meterProvider := providers.Traces, providers.Metrics
 
-	metricExporter, err := stdoutmetric.New()
-	if err != nil {
-		return err
-	}
-	meterProvider := sdkmetric.NewMeterProvider(
-		sdkmetric.WithResource(resource.NewSchemaless(attribute.String("service.name", "otel-playground"))),
-		sdkmetric.WithReader(sdkmetric.NewPeriodicReader(metricExporter, sdkmetric.WithInterval(5*time.Second))),
-	)
-	defer func() {
-		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		if err := meterProvider.Shutdown(ctx); err != nil {
-			log.Print(err)
-		}
-	}()
 	measurements, err := newMetrics(meterProvider)
 	if err != nil {
 		return err
 	}
 
-	port := os.Getenv("PORT")
-	if port == "" {
-		port = "3000"
+	downstreamURL := os.Getenv("API_B_URL")
+	if downstreamURL == "" {
+		downstreamURL = "http://127.0.0.1:3001"
 	}
-	listener, err := net.Listen("tcp", net.JoinHostPort("127.0.0.1", port))
-	if err != nil {
-		return err
+	parsed, err := url.Parse(downstreamURL)
+	if err != nil || parsed.Host == "" || (parsed.Scheme != "http" && parsed.Scheme != "https") || parsed.RawQuery != "" || parsed.Fragment != "" || (parsed.Path != "" && parsed.Path != "/") {
+		return errors.New("API_B_URL must be an http(s) origin, e.g. http://127.0.0.1:3001")
 	}
-	server := &http.Server{Handler: newHandler(provider, measurements), ReadHeaderTimeout: 5 * time.Second}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
-	defer stop()
-	done := make(chan error, 1)
-	go func() { done <- server.Serve(listener) }()
-	fmt.Println("Listening on http://" + listener.Addr().String())
-	select {
-	case err := <-done:
-		return err
-	case <-ctx.Done():
-		shutdownCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-		defer cancel()
-		return server.Shutdown(shutdownCtx)
-	}
+	return telemetry.Serve(newHandler(provider, measurements, strings.TrimRight(downstreamURL, "/")), "3000")
 }
 
-func newHandler(provider trace.TracerProvider, measurements *metrics) http.Handler {
+func newHandler(provider trace.TracerProvider, measurements *metrics, downstreamURL string) http.Handler {
 	tracer := provider.Tracer("playground")
+	propagated := downstreamClient(provider, measurements.provider, propagation.TraceContext{})
+	isolated := downstreamClient(provider, measurements.provider, propagation.NewCompositeTextMapPropagator())
 	handler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/events" {
 			measurements.receive(w, r)
 			return
 		}
-		isAPI := r.Method == http.MethodGet && (r.URL.Path == "/ok" || r.URL.Path == "/slow" || r.URL.Path == "/error")
+		isAPI := r.Method == http.MethodGet && (r.URL.Path == "/ok" || r.URL.Path == "/slow" || r.URL.Path == "/error" || r.URL.Path == "/downstream")
 		if isAPI {
 			measurements.requests.Add(r.Context(), 1, metric.WithAttributes(attribute.String("route", r.URL.Path)))
 		}
@@ -127,6 +86,8 @@ func newHandler(provider trace.TracerProvider, measurements *metrics) http.Handl
 		case "/":
 			w.Header().Set("Content-Type", "text/html; charset=utf-8")
 			_, _ = w.Write(indexHTML)
+		case "/downstream":
+			callDownstream(r, downstreamURL, propagated, isolated, reply)
 		case "/ok":
 			reply(http.StatusOK, map[string]any{"message": "ok"})
 		case "/slow":

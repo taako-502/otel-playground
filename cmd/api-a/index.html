@@ -1,0 +1,135 @@
+<!doctype html>
+<html lang="ja">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenTelemetry Playground</title>
+<style>
+:root{color-scheme:light;font-family:system-ui,sans-serif;background:#f4f6fa;color:#182238}
+*{box-sizing:border-box}body{height:100dvh;margin:0;padding:20px 24px 12px;display:flex;flex-direction:column;gap:16px;overflow:hidden}
+header{flex:none;display:flex;align-items:baseline;gap:20px;flex-wrap:wrap}.tag{color:#365cd1;font-size:11px;font-weight:700;letter-spacing:.12em}h1{font-size:24px;letter-spacing:-.04em;margin:0}h2{font-size:16px;margin:0 0 14px}p{line-height:1.6;color:#4b5870;margin:12px 0 0;font-size:13px}
+.workspace{flex:1;min-height:0;display:grid;grid-template-columns:minmax(300px,.8fr) minmax(0,1.35fr);gap:18px;width:100%;max-width:1600px;align-self:center}
+.controls{min-height:0;overflow:auto;display:flex;flex-direction:column;gap:14px}.panel{background:white;border:1px solid #dde3ee;border-radius:14px;padding:20px;min-width:0}.controls .panel{flex:none}
+.buttons{display:grid;grid-template-columns:1fr 1fr;gap:10px}button{font:inherit;font-size:14px;font-weight:600;border:1px solid #c7d2e6;border-radius:9px;padding:11px 12px;background:#edf2ff;color:#24469f;cursor:pointer}button:hover{background:#dfe8ff}button:focus-visible,select:focus-visible,summary:focus-visible,pre:focus-visible{outline:3px solid #496fff;outline-offset:3px}button:disabled{opacity:.5;cursor:wait}.primary{width:100%;background:#3159cf;color:white}.primary:hover{background:#2549b2}
+.options{display:flex;flex-wrap:wrap;align-items:center;gap:12px;margin:0 0 14px}label{font-size:14px;display:flex;align-items:center;gap:8px}select{font:inherit;padding:7px;border:1px solid #c7d2e6;border-radius:8px}input[type=checkbox]{width:16px;height:16px}details{margin-top:14px;font-size:13px;color:#4b5870}summary{cursor:pointer;line-height:1.6}
+.output{min-height:0;display:flex;flex-direction:column;overflow:hidden}.output-heading{display:flex;align-items:baseline;justify-content:space-between;gap:12px;flex-wrap:wrap}.output-heading h2{margin:0}.hint{font-size:12px;color:#65718a}#delivery{font-size:12px;flex:none;margin:8px 0 14px}
+pre{flex:1;min-height:0;overflow:auto;white-space:pre-wrap;overflow-wrap:anywhere;font-family:ui-monospace,SFMono-Regular,monospace;font-size:13px;line-height:1.65;background:#f6f8fc;border:1px solid #e4e9f2;border-radius:10px;margin:0;padding:16px;scrollbar-gutter:stable}
+footer{flex:none;color:#65718a;font-size:12px;line-height:1.5}
+@media(max-width:760px){body{padding:12px;gap:10px}header{gap:4px 12px}h1{font-size:18px}.tag{font-size:10px}.workspace{grid-template-columns:minmax(0,1fr);grid-template-rows:minmax(0,1fr) minmax(0,1fr);gap:10px}.controls{gap:10px}.panel{padding:14px}h2{margin-bottom:10px}pre{padding:10px;font-size:12px}footer{font-size:10px}}
+@media(max-height:650px) and (min-width:761px){body{padding-top:12px;gap:10px}.panel{padding:14px}.controls{gap:10px}h2{margin-bottom:10px}button{padding:9px}pre{line-height:1.5}}
+</style>
+<body>
+<header><div class="tag">LOCAL OBSERVABILITY LAB</div><h1>操作して、計測を見てみよう。</h1></header>
+<main class="workspace">
+<div class="controls" role="region" aria-label="操作パネル" tabindex="0">
+<section class="panel">
+<h2>API Aを試す</h2>
+<div class="buttons">
+<button data-api="/ok">正常なAPI</button>
+<button data-api="/slow">1秒待つAPI</button>
+<button data-api="/error">HTTPエラー</button>
+<button id="js-error">JavaScriptエラー</button>
+</div>
+<details><summary>この操作で計測するもの</summary><p>各クリックと通信時間を計測します。HTTPエラーとJavaScriptエラーは学習用に意図して発生させます。</p></details>
+</section>
+<section class="panel">
+<h2>API A → API B のトレース伝播</h2>
+<div class="options">
+<label>Bの動作 <select id="work-mode"><option value="ok">正常</option><option value="slow" selected>1秒待機</option><option value="error">エラー</option></select></label>
+<label><input id="propagate" type="checkbox" checked> traceparentを伝播する</label>
+</div>
+<button class="primary" data-api="/downstream">API Bを呼ぶ</button>
+<p>伝播あり：AとBが同じTraceID<br>伝播なし：Bが別のTraceIDで開始</p>
+<details><summary>スパンの関係・エラー時の動作</summary><p>伝播あり：A SERVER → A CLIENT → B SERVER → B simulate-work<br>伝播なし：A SERVER → A CLIENT ／ B SERVER → B simulate-work</p><p>BのHTTP 500はAでHTTP 502に変換します。Bが未起動の場合もHTTP 502になります。</p></details>
+</section>
+</div>
+<section class="panel output" aria-labelledby="results-heading">
+<div class="output-heading"><h2 id="results-heading">実行結果</h2><span class="hint">最新の結果が先頭に表示されます</span></div>
+<p id="delivery" role="status">ページ読み込みを計測中…</p>
+<pre id="results" aria-live="polite" tabindex="0" aria-label="実行結果と履歴">操作結果がここに表示されます。</pre>
+</section>
+</main>
+<footer>トレースはリクエストごと、メトリクスは約5秒ごとにターミナルへ出力。再読み込みでページ読み込み時間を再計測します。</footer>
+<script>
+const results = document.querySelector('#results');
+const delivery = document.querySelector('#delivery');
+const lines = [];
+function show(text) {
+  lines.unshift(text);
+  lines.length = Math.min(lines.length, 20);
+  results.textContent = lines.join('\n\n────────────────────\n\n');
+  results.scrollTop = 0;
+}
+let accepted = 0, failed = 0;
+async function report(event) {
+  try {
+    const response = await fetch('/events', {
+      method: 'POST', headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(event), keepalive: true
+    });
+    if (!response.ok) throw new Error('event rejected');
+    accepted++;
+  } catch {
+    failed++;
+  }
+  delivery.textContent = `計測イベントの送信：成功 ${accepted}件 / 失敗 ${failed}件`;
+}
+for (const button of document.querySelectorAll('[data-api]')) {
+  button.addEventListener('click', async () => {
+    const target = button.dataset.api;
+    void report({type: 'click', target});
+    button.disabled = true;
+    const start = performance.now();
+    let outcome = 'network_error';
+    try {
+      let url = target;
+      if (target === '/downstream') {
+        url += '?' + new URLSearchParams({mode: document.querySelector('#work-mode').value, propagate: String(document.querySelector('#propagate').checked)});
+      }
+      const response = await fetch(url);
+      const body = await response.json();
+      outcome = response.ok ? 'ok' : 'http_error';
+      let message = `${target} → HTTP ${response.status}\nブラウザ通信時間 ${(performance.now() - start).toFixed(1)} ms\nA TraceID: ${body.traceId}`;
+      if (body.downstream) {
+        const b = body.downstream;
+        message += `\n伝播: ${body.propagation ? 'あり' : 'なし'} / Bの動作: ${b.mode} / B HTTP ${body.downstreamStatus}`;
+        message += `\nA SERVER SpanID: ${body.spanId}\nB TraceID: ${b.traceId}\nB SERVER SpanID: ${b.spanId}`;
+        message += `\nBの親SpanID（A CLIENT）: ${b.parentSpanId || 'なし：Bは新しいトレースのルート'}\nB simulate-work SpanID: ${b.workSpanId}`;
+        message += `\nBが受信したtraceparent: ${b.traceparent || 'なし'}`;
+        message += `\n結果: ${body.traceId === b.traceId ? 'AとBが同じトレースにつながりました' : 'AとBは別のトレースです'}`;
+      }
+      if (body.error) message += `\n${body.error}`;
+      show(message);
+    } catch {
+      show(`${target} → 通信に失敗しました`);
+    } finally {
+      void report({type: 'fetch', target, durationMs: performance.now() - start, outcome});
+      button.disabled = false;
+    }
+  });
+}
+window.addEventListener('error', () => {
+  show('JavaScriptエラーを検出しました。');
+  void report({type: 'js_error', target: 'window'});
+});
+window.addEventListener('unhandledrejection', () => {
+  show('未処理のPromiseエラーを検出しました。');
+  void report({type: 'js_error', target: 'window'});
+});
+document.querySelector('#js-error').addEventListener('click', () => {
+  void report({type: 'click', target: 'js-error'});
+  setTimeout(() => { throw new Error('Intentional browser demo error'); }, 0);
+});
+window.addEventListener('load', () => {
+  // loadイベント終了後にNavigation Timingを読む。
+  setTimeout(() => {
+    const entry = performance.getEntriesByType('navigation')[0];
+    if (entry && entry.loadEventEnd > 0) {
+      const durationMs = entry.loadEventEnd - entry.startTime;
+      show(`ページ読み込み時間 ${durationMs.toFixed(1)} ms`);
+      void report({type: 'navigation', target: '/', durationMs});
+    }
+  }, 0);
+});
+</script>
+</body>
+</html>
