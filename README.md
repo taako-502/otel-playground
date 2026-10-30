@@ -160,6 +160,9 @@ go test -tags=integration ./integration -v -count=1 -timeout=5m
 
 </details>
 
+## 記事
+https://ap-ep.com/go-opentelemetry-grafana-distributed-tracing/
+
 ## 参考
 
 - [OpenTelemetry Go入門](https://opentelemetry.io/docs/languages/go/getting-started/)
